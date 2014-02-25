@@ -70,7 +70,23 @@ typedef struct {
 
 void usage() {
 	printf("\n"
-"This is the usage\n"
+"Usage: cf-scheduler [-c command] [-l label] [-i interval] [-s] [-t] [-I job_id] [-h]\n"
+"\n"
+"A multithreaded scheduler that outputs return and status values in CFEngine module\n"
+"format.\n"
+"\n" 
+"  -c       Command to periodically run.\n"
+"  -i       Interval for job.\n"
+"  -l       Label for command. Used either on termination or initiation. Needs to be unique.\n"
+"  -h       File to write encrypted/decrypted contents to. '-' writes to stdout.\n"
+"  -I       Job id to terminate\n"
+"  -h       Print help.\n"
+"  -t       Terminate a job. Needs to be used together with -l or -I.\n"
+"  -s       Print current status.\n"
+"\n"
+"Written and maintained by Jon Henrik Bjornstad <jonhenrik@cfengineers.net>\n"
+"\n"
+"Copyright (C) cfengineers.net\n"
 "\n");
 }
 
