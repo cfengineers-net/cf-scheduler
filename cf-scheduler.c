@@ -1,3 +1,20 @@
+/*
+   cf-scheduler.c
+
+   Copyright (C) cfengineers.net
+
+   Written and maintained by Jon Henrik Bjornstad <jonhenrik@cfengineers.net>
+
+   This program is free software; you can redistribute it and/or modify it
+   under the terms of the GNU General Public License as published by the
+   Free Software Foundation; version 3.
+
+   This program is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU General Public License for more details.
+*/
+
 //#define _MULTI_THREADED
 #include <sys/stat.h>
 #include <sys/time.h>
