@@ -98,7 +98,7 @@ void *run(void *job) {
 		if(msec > 0)
 			u_sleep(msec);
 	}
-	//dbg_printf("Exiting thread....\n");
+	dbg_printf("Exiting thread....\n");
 	free(j);
 
 	pthread_exit(NULL);
@@ -273,7 +273,7 @@ int main(int argc, char *argv[]) {
 	Job jobs[CF_MAXTHREADS];	
 	int i;
 
-  int rc = 0;
+	int rc = 0;
 	
 	struct sockaddr_un address;
 	int socket_fd, connection_fd;
@@ -289,38 +289,37 @@ int main(int argc, char *argv[]) {
 	int c = 0;
 	struct stat fileStat;
 
-  while ((c = getopt (argc, argv, "hdsti:l:c:I:")) != -1)
-		switch (c)
-			{
-				case 's':
-					status = 1;
-					break;
-				case 'l':
-					label = optarg;
-					break;
-				case 'i':
-					intrvl = optarg;
-					break;
-				case 'c':
-					command = optarg;
-					break;
-				case 't':
-					term = 1;
-					break;
-				case 'I':
-					job_id = optarg;
-					break;
-				case 'd':
-					debug = 1;
-					break;
-				case 'h':
-					usage();
-					exit(1);
-				default:
-					printf("ERROR: Unknown option '-%c'\n", optopt);
-					usage();
-					exit(1);
-			}
+	while ((c = getopt (argc, argv, "hdsti:l:c:I:")) != -1)
+		switch (c) {
+			case 's':
+				status = 1;
+				break;
+			case 'l':
+				label = optarg;
+				break;
+			case 'i':
+				intrvl = optarg;
+				break;
+			case 'c':
+				command = optarg;
+				break;
+			case 't':
+				term = 1;
+				break;
+			case 'I':
+				job_id = optarg;
+				break;
+			case 'd':
+				debug = 1;
+				break;
+			case 'h':
+				usage();
+				exit(1);
+			default:
+				printf("ERROR: Unknown option '-%c'\n", optopt);
+				usage();
+				exit(1);
+		}
 	
 
 	if(status > 0) {
@@ -352,7 +351,6 @@ int main(int argc, char *argv[]) {
 		exit(1);
 	}
 
- 	//fork, detach from process group leader
 	if(debug == 0) {
 		if( (child=fork())<0 ) { //failed fork
 			fprintf(stderr,"error: failed fork\n");
@@ -369,7 +367,7 @@ int main(int argc, char *argv[]) {
 
 	socket_fd = socket(PF_UNIX, SOCK_STREAM, 0);
 	if(socket_fd < 0) {
-		//dbg_printf("socket() failed\n");
+		dbg_printf("socket() failed\n");
 		return 1;
 	} 
 
@@ -381,18 +379,20 @@ int main(int argc, char *argv[]) {
 	snprintf(address.sun_path, UNIX_PATH_MAX, SOCKPATH);
 
 	if(bind(socket_fd, (struct sockaddr *) &address, sizeof(struct sockaddr_un)) != 0) {
-		//dbg_printf("bind() failed\n");
+		dbg_printf("bind() failed\n");
 		return 1;
 	}
 
 	if(listen(socket_fd, 5) != 0) {
-		//dbg_printf("listen() failed\n");
+		dbg_printf("listen() failed\n");
 		return 1;
 	}
+
 	char mode[5];
 	strcpy(mode, "0700");
 	int m = atoi(mode);
 	chmod(SOCKPATH,S_IRUSR|S_IWUSR|S_IXUSR);
+
 	while(1) {
 		address_length = sizeof(address);
 		if((connection_fd = accept(socket_fd, (struct sockaddr *) &address, &address_length)) == -1) {
