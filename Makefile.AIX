@@ -1,0 +1,10 @@
+CC=gcc -g
+
+LDFLAGS= -L/var/cfengine/lib -lpthreads
+#LDLIBS=-Wl,-rpath,/var/cfengine/lib -lpthreads
+PROG=cf-scheduler
+
+all: $(PROG)
+
+clean:
+	rm -f $(PROG)
