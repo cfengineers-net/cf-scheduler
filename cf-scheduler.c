@@ -46,9 +46,9 @@ int num_threads = 0;
 int run_status[CF_MAXTHREADS] = {};
 int job_ids = 0;
 short debug = 0;
-pthread_mutex_t mutex;
-pthread_cond_t cond;
+struct sigaction sigact;
 char *prog_name_canon = "cf_scheduler";
+int socket_fd = 0;
 
 typedef struct {
 	short *run_it;
@@ -70,7 +70,7 @@ typedef struct {
 
 void usage() {
 	printf("\n"
-"Usage: cf-scheduler [-c command] [-l label] [-i interval] [-s] [-t] [-I job_id] [-h]\n"
+"Usage: cf-scheduler [-c command] [-l label] [-i interval] [-s] [-t] [-I job_id] [-d] [-h]\n"
 "\n"
 "A multithreaded scheduler that outputs return and status values in CFEngine module\n"
 "format.\n"
@@ -83,6 +83,7 @@ void usage() {
 "  -h       Print help.\n"
 "  -t       Terminate a job. Needs to be used together with -l or -I.\n"
 "  -s       Print current status.\n"
+"  -d       Run daemon in foreground with debug messages.\n"
 "\n"
 "Written and maintained by Jon Henrik Bjornstad <jonhenrik@cfengineers.net>\n"
 "\n"
@@ -94,6 +95,7 @@ void dbg_printf(const char *fmt, ...) {
 	if(debug == 1){
 		va_list args;
 		va_start(args, fmt);
+		fprintf(stderr, "Debug: ");
 		vfprintf(stderr, fmt, args);
 		va_end(args);
 	}
@@ -120,18 +122,22 @@ void *run(void *job) {
 	while(j->run_it > 0){
 		gettimeofday(&before, NULL);		
 	
+		dbg_printf("Spawning  => Label: %s, Job: %s\n", j->label, j->job);
+
 		exec_shell(j->job);
 
 		gettimeofday(&after, NULL);
 
 		msec = (j->interval*1000000L) - (((after.tv_sec - before.tv_sec)*1000000L + after.tv_usec) - before.tv_usec);
 
-		dbg_printf("Run_it: %d,Label: %s, Job: %s => Will sleep for : %ld microseconds\n", j->run_it, j->label, j->job, msec);
+		dbg_printf("Completed => Label: %s, Job: %s\n", j->label, j->job);
+
+		dbg_printf("Sleep     => Label: %s, Job: %s (%ld mus)\n", j->label, j->job, msec);
 
 		if(msec > 0)
 			u_sleep(msec);
 	}
-	dbg_printf("Exiting thread....\n");
+	dbg_printf("Exiting   => Label: %s, Job: %s\n", j->label, j->job);
 	free(j);
 
 	pthread_exit(NULL);
@@ -201,16 +207,20 @@ int connection_handler(Job *jobs, int connection_fd) {
 	Job *j;
 	
 	if(sscanf(buffer, "op=job intvl=%d lbl=%s cmd=%[^\t\n] %*s",  &interval, label, command)) {
+		dbg_printf("Processing new job request.\n");
 		if((locate_job(jobs,label,0)) > -1){
 			nbytes = snprintf(buffer, BUFSIZE,"+%s_exists\n", label);
 			write(connection_fd, buffer, nbytes);
+			dbg_printf("Job with label %s exists, discarding request...\n", label);
 		} else {
+			dbg_printf("Job with label %s not found, spawning new thread..\n", label);
 			create_job(jobs,interval,label,command);
 			nbytes = snprintf(buffer, BUFSIZE, "+%s_repaired\n", label);
 			write(connection_fd, buffer, nbytes);
 		}
 	}else if(sscanf(buffer, "op=status%*s")) {
 
+		dbg_printf("Returning status information.\n");
 		nbytes = snprintf(buffer, BUFSIZE,"=num_threads=%d\n", num_threads);
 		write(connection_fd, buffer, nbytes);
 
@@ -226,12 +236,12 @@ int connection_handler(Job *jobs, int connection_fd) {
 				write(connection_fd, buffer, nbytes);
 			}
 		}
-	} else if((strstr(buffer, "op=term")) != NULL) { //sscanf(buffer, "op=term%*s")){
+	} else if((strstr(buffer, "op=term")) != NULL) { 
 		int index = -1;
 		int lab = 0;
 		int id = 0;
 		if(sscanf(buffer, "op=term job_id=%d", &job_id)){
-			dbg_printf("Request for terminating job %d\n", job_id);	
+			dbg_printf("Request for terminating job with job id %d\n", job_id);	
 			index = locate_job(jobs, NULL, job_id);
 			id = 1;
 		}else if(sscanf(buffer, "op=term lbl=%s", label)){
@@ -276,7 +286,7 @@ int send_command(char *opstring){
 
 	socket_fd = socket(PF_UNIX, SOCK_STREAM, 0);
 	if(socket_fd < 0) {
-		//dbg_printf("socket() failed\n");
+		printf("socket() failed\n");
 		return 1;
 	}
 
@@ -287,7 +297,7 @@ int send_command(char *opstring){
 	snprintf(address.sun_path, UNIX_PATH_MAX, SOCKPATH);
 
 	if(connect(socket_fd, (struct sockaddr *) &address, sizeof(struct sockaddr_un)) != 0) {
-		//dbg_printf("connect() failed\n");
+		printf("connect() failed\n");
 		return 1;
 	}
 
@@ -301,6 +311,22 @@ int send_command(char *opstring){
 	close(socket_fd);
 }
 
+static void signal_handler(int sig){
+	if (sig == SIGINT || sig == SIGTERM) {
+		dbg_printf("Caught signal %d. Exiting gracefully....\n", sig);
+		close(socket_fd);
+		unlink(SOCKPATH);
+		exit(0);
+	}
+}
+
+void init_signals(void){
+	sigact.sa_handler = signal_handler;
+	sigemptyset(&sigact.sa_mask);
+	sigact.sa_flags = 0;
+	sigaction(SIGINT, &sigact, (struct sigaction *)NULL);
+	sigaction(SIGTERM, &sigact, (struct sigaction *)NULL);
+}
 
 int main(int argc, char *argv[]) {
 	Job jobs[CF_MAXTHREADS];	
@@ -309,6 +335,7 @@ int main(int argc, char *argv[]) {
 	int rc = 0;
 	
 	struct sockaddr_un address;
+	//int connection_fd;
 	int socket_fd, connection_fd;
 	socklen_t address_length;
 	pid_t child;
@@ -383,6 +410,7 @@ int main(int argc, char *argv[]) {
 		printf("Socket %s exists, another process might be running. Exiting...\n", SOCKPATH);
 		exit(1);
 	}
+	init_signals();
 
 	if(debug == 0) {
 		if( (child=fork())<0 ) { //failed fork
@@ -396,11 +424,13 @@ int main(int argc, char *argv[]) {
 			fprintf(stderr,"error: failed setsid\n");
 			exit(EXIT_FAILURE);
 		}
+	} else {
+		dbg_printf("Starting in foreground mode as debug was specified\n");
 	}
 
 	socket_fd = socket(PF_UNIX, SOCK_STREAM, 0);
 	if(socket_fd < 0) {
-		dbg_printf("socket() failed\n");
+		printf("socket() failed\n");
 		return 1;
 	} 
 
@@ -412,12 +442,12 @@ int main(int argc, char *argv[]) {
 	snprintf(address.sun_path, UNIX_PATH_MAX, SOCKPATH);
 
 	if(bind(socket_fd, (struct sockaddr *) &address, sizeof(struct sockaddr_un)) != 0) {
-		dbg_printf("bind() failed\n");
+		printf("bind() failed\n");
 		return 1;
 	}
 
 	if(listen(socket_fd, 5) != 0) {
-		dbg_printf("listen() failed\n");
+		printf("listen() failed\n");
 		return 1;
 	}
 
@@ -432,6 +462,7 @@ int main(int argc, char *argv[]) {
 			printf("accept error: %s\n", strerror(errno));
 			break;
 		}
+		dbg_printf("Handling new connection.\n");
 		connection_handler(jobs, connection_fd);
 	}
 
