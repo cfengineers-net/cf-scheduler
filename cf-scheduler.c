@@ -272,6 +272,7 @@ int connection_handler(Job *jobs, int connection_fd) {
 			else
 				nbytes = snprintf(buffer, BUFSIZE, "+%d_id_notfound\n", job_id);
 
+		if(id > 0 || lab > 0)
 			write(connection_fd, buffer, nbytes);
 	}
 	close(connection_fd);
