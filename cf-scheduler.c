@@ -16,6 +16,7 @@
 */
 
 //#define _MULTI_THREADED
+#include <assert.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <stdio.h>
@@ -43,30 +44,37 @@
 #define SOCKPATH "/var/tmp/cf-scheduler-socket"
 
 int num_threads = 0;
-int run_status[CF_MAXTHREADS] = {};
-int job_ids = 0;
+int job_id = 0;
 short debug = 0;
 struct sigaction sigact;
 char *prog_name_canon = "cf_scheduler";
 int socket_fd = 0;
 
-typedef struct {
-	short *run_it;
+struct job {
+	short run_it;
 	int interval;
 	char *label;
-	char *job;
+	char *cmd;
 	int job_id;
 	pthread_attr_t pta;
 	pthread_t thread;
-} Job;
+};
 
-typedef struct {
-	short run_it;
-	int index;
-	char *job;
-	char *label;
-	int interval;
-} Job_args;
+typedef struct job Job;
+
+struct job_node {
+	Job *job;
+	struct job_node *next;
+};
+
+typedef struct job_node Job_node;
+
+struct job_list {
+	Job_node *head;
+	Job_node *tail;
+};
+
+typedef struct job_list Job_list;
 
 void usage() {
 	printf("\n"
@@ -101,6 +109,119 @@ void dbg_printf(const char *fmt, ...) {
 	}
 }
 
+void *run(void *job) {
+	Job *j = (Job *)job;
+	struct timeval before,after,sleeper;
+	FILE *fp;
+	long msec; 
+	char buf[BUFSIZE];
+
+	errno = 0;
+
+	while(1){
+		gettimeofday(&before, NULL);		
+
+		dbg_printf("Spawning  => Label: %s, Job: %s\n", j->label, j->cmd);
+	
+		exec_shell(j->cmd);
+
+		gettimeofday(&after, NULL);
+
+		msec = (j->interval*1000000L) - (((after.tv_sec - before.tv_sec)*1000000L + after.tv_usec) - before.tv_usec);
+
+		dbg_printf("Completed => Label: %s, Job: %s\n", j->label, j->cmd);
+
+		dbg_printf("Sleep     => Label: %s, Job: %s (%ld mus)\n", j->label, j->cmd, msec);
+		if(msec > 0)
+			u_sleep(msec);
+	}
+
+	pthread_exit(NULL);
+}
+
+void add_job(Job_list *jobs, char *label, char *cmd, int interval){
+	Job_node *temp, *current;
+	int rc = 0;
+
+	temp = (Job_node *)malloc(sizeof(Job_node));
+	assert(temp != NULL);
+
+	temp->job = (Job *)malloc(sizeof(Job));
+	assert(temp->job != NULL);
+	
+	temp->job->cmd = (char *)malloc((strlen(cmd) + 1) * sizeof(char));
+	strcpy(temp->job->cmd,cmd);
+
+	temp->job->label = (char *)malloc((strlen(label) + 1) * sizeof(char));
+	strcpy(temp->job->label,label);
+
+	job_id++;
+	num_threads++;
+
+	temp->job->interval = interval;
+	temp->job->run_it = 1;
+	temp->job->job_id = job_id;
+
+	rc = pthread_create(&temp->job->thread, NULL, run, (void *)temp->job);
+
+	if (jobs->head == NULL) {     /* list is empty */
+		jobs->head = jobs->tail = temp;
+		return;
+	} else { // list is not empty
+		jobs->tail->next = temp;
+		jobs->tail = temp;
+		return;
+	}
+}
+
+int delete_job(Job_list *jobs, char *label, int job_id) {
+
+	Job_node *iter,*previous;
+	previous = NULL;
+	iter = jobs->head;
+	int found = 0;
+
+	if(iter == NULL)
+		return(0);
+
+	while(iter->next != NULL){
+		if((label != NULL && (strcmp(iter->job->label,label)) == 0) || (job_id != 0 && iter->job->job_id == job_id)) {
+			found = 1;
+			if(previous == NULL) { /* First item */
+				jobs->head = iter->next;
+				break;
+			}else {
+				previous->next = iter->next;	
+				break;
+			}
+		}
+		previous = iter;
+		iter = iter->next;
+	}
+
+	if(found == 0) {
+		if((label != NULL && (strcmp(iter->job->label,label)) == 0) || (job_id != 0 && iter->job->job_id == job_id)) {
+			if(jobs->tail == jobs->head){
+				jobs->tail = NULL;
+				jobs->head = NULL;
+			}else{
+				jobs->tail = previous;
+				previous->next = NULL;
+			}
+			found = 1;
+		}
+	}
+	if(found > 0){
+		pthread_cancel(iter->job->thread);
+		free(iter->job->label);
+		free(iter->job->cmd);
+		free(iter->job);
+		free(iter);
+		num_threads--;
+	}
+	return(found);
+}
+
 int exec_shell(const char *cmd) {
 	FILE *p = NULL;
 
@@ -110,39 +231,6 @@ int exec_shell(const char *cmd) {
 	return (pclose(p));
 }
 
-void *run(void *job) {
-	Job_args *j = (Job_args *)job;
-	struct timeval before,after,sleeper;
-	FILE *fp;
-	long msec; 
-	char buf[BUFSIZE];
-
-	errno = 0;
-
-	while(j->run_it > 0){
-		gettimeofday(&before, NULL);		
-	
-		dbg_printf("Spawning  => Label: %s, Job: %s\n", j->label, j->job);
-
-		exec_shell(j->job);
-
-		gettimeofday(&after, NULL);
-
-		msec = (j->interval*1000000L) - (((after.tv_sec - before.tv_sec)*1000000L + after.tv_usec) - before.tv_usec);
-
-		dbg_printf("Completed => Label: %s, Job: %s\n", j->label, j->job);
-
-		dbg_printf("Sleep     => Label: %s, Job: %s (%ld mus)\n", j->label, j->job, msec);
-
-		if(msec > 0)
-			u_sleep(msec);
-	}
-	dbg_printf("Exiting   => Label: %s, Job: %s\n", j->label, j->job);
-	free(j);
-
-	pthread_exit(NULL);
-}
-
 int u_sleep(long usec) {
 	struct timeval tv;
 	tv.tv_sec = usec/1000000L;
@@ -150,51 +238,55 @@ int u_sleep(long usec) {
 	return select(0, 0, 0, 0, &tv);
 }
 
-void create_job(Job *jobs, int interval, char *label, char *command){
 
-	int rc = 0;
-	size_t stack_size;
-	Job_args *j_args = (Job_args*) malloc(sizeof(Job_args));
+void print_status(Job_list *jobs, int connection_fd){
+	Job_node *iter = jobs->head;
+	int nbytes;
+	char buffer[BUFSIZE];
 
-	j_args->job = (char *) calloc(strlen(command) + 1,sizeof(char));
-	j_args->label = (char *) calloc(strlen(label) + 1,sizeof(char));
+	nbytes = snprintf(buffer, BUFSIZE,"=num_threads=%d\n", num_threads);
+	write(connection_fd, buffer, nbytes);
 
-	strcpy(j_args->label,label);
-	strcpy(j_args->job,command);
+	if(iter == NULL)
+		return;
 
-	j_args->interval = interval;
-
-	jobs[num_threads].label = (char *) calloc(strlen(label) + 1,sizeof(char));
-	jobs[num_threads].job = (char *) calloc(strlen(command) + 1,sizeof(char));
-
-	strcpy(jobs[num_threads].label,label);
-	strcpy(jobs[num_threads].job,command);
-
-	jobs[num_threads].interval = interval;
-	jobs[num_threads].job_id = job_ids + 1;
-
-	j_args->run_it = 1;
-	jobs[num_threads].run_it = &j_args->run_it;
-
-	rc = pthread_create(&jobs[num_threads].thread, NULL, run, (void *)j_args);
-
-	num_threads++;
-	job_ids++;
-}
-
-int locate_job(Job *jobs, char *label, int job_id){
-	int i = 0;
-	for(i = 0; i < num_threads; i++) {
-		if(job_id > 0 && jobs[i].job_id == job_id){
-			return i;	
-		}else if(label != NULL && strcmp(jobs[i].label,label) == 0){
-			return i;
-		}
+	while(iter->next != NULL){
+		nbytes = snprintf(buffer, BUFSIZE,"=status[%d][cmd]=%s\n", iter->job->job_id, iter->job->cmd);
+		write(connection_fd, buffer, nbytes);
+		nbytes = snprintf(buffer, BUFSIZE,"=status[%d][interval]=%d\n", iter->job->job_id, iter->job->interval);
+		write(connection_fd, buffer, nbytes);
+		nbytes = snprintf(buffer, BUFSIZE,"=status[%d][label]=%s\n", iter->job->job_id, iter->job->label);
+		write(connection_fd, buffer, nbytes);
+		iter = iter->next;
 	}
-	return -1;
+	nbytes = snprintf(buffer, BUFSIZE,"=status[%d][cmd]=%s\n", iter->job->job_id, iter->job->cmd);
+	write(connection_fd, buffer, nbytes);
+	nbytes = snprintf(buffer, BUFSIZE,"=status[%d][interval]=%d\n", iter->job->job_id, iter->job->interval);
+	write(connection_fd, buffer, nbytes);
+	nbytes = snprintf(buffer, BUFSIZE,"=status[%d][label]=%s\n", iter->job->job_id, iter->job->label);
+	write(connection_fd, buffer, nbytes);
 }
 
-int connection_handler(Job *jobs, int connection_fd) {
+Job_node *locate_job(Job_list *jobs, char *label){
+	Job_node *iter = jobs->head;
+
+	if(iter == NULL)
+		return NULL;
+	
+	while(iter->next != NULL){
+		if((strcmp(iter->job->label, label)) == 0){
+			return iter;
+		}
+		iter = iter->next;
+	}
+	if((strcmp(iter->job->label, label)) == 0){
+		return iter;
+	}
+
+	return NULL;
+}
+
+int connection_handler(Job_list *jobs, int connection_fd) {
 	int nbytes;
 	char buffer[BUFSIZE];
 	nbytes = read(connection_fd, buffer, BUFSIZE);
@@ -204,74 +296,46 @@ int connection_handler(Job *jobs, int connection_fd) {
 	int interval,job_id;
 	int thread_wait = 0;
 	char label[BUFSIZE];
-	Job *j;
 	
 	if(sscanf(buffer, "op=job intvl=%d lbl=%s cmd=%[^\t\n] %*s",  &interval, label, command)) {
 		dbg_printf("Processing new job request.\n");
-		if((locate_job(jobs,label,0)) > -1){
-			nbytes = snprintf(buffer, BUFSIZE,"+%s_exists\n", label);
+		if((locate_job(jobs, label)) == NULL){
+			add_job(jobs, label, command, interval);
+			nbytes = snprintf(buffer, BUFSIZE,"+%s_repaired\n", label);
 			write(connection_fd, buffer, nbytes);
-			dbg_printf("Job with label %s exists, discarding request...\n", label);
-		} else {
-			dbg_printf("Job with label %s not found, spawning new thread..\n", label);
-			create_job(jobs,interval,label,command);
-			nbytes = snprintf(buffer, BUFSIZE, "+%s_repaired\n", label);
+		}else{
+			nbytes = snprintf(buffer, BUFSIZE,"+%s_exists\n", label);
 			write(connection_fd, buffer, nbytes);
 		}
 	}else if(sscanf(buffer, "op=status%*s")) {
-
 		dbg_printf("Returning status information.\n");
-		nbytes = snprintf(buffer, BUFSIZE,"=num_threads=%d\n", num_threads);
-		write(connection_fd, buffer, nbytes);
-
-		int i = 0;
-
-		for(i = 0; i < num_threads; i++){
-			if(jobs[i].label != NULL){
-				nbytes = snprintf(buffer, BUFSIZE,"=status[%d][cmd]=%s\n", jobs[i].job_id, jobs[i].job);
-				write(connection_fd, buffer, nbytes);
-				nbytes = snprintf(buffer, BUFSIZE,"=status[%d][interval]=%d\n", jobs[i].job_id, jobs[i].interval);
-				write(connection_fd, buffer, nbytes);
-				nbytes = snprintf(buffer, BUFSIZE,"=status[%d][label]=%s\n", jobs[i].job_id, jobs[i].label);
-				write(connection_fd, buffer, nbytes);
-			}
-		}
+		print_status(jobs, connection_fd);
 	} else if((strstr(buffer, "op=term")) != NULL) { 
-		int index = -1;
 		int lab = 0;
 		int id = 0;
+		int found = 0;
 		if(sscanf(buffer, "op=term job_id=%d", &job_id)){
 			dbg_printf("Request for terminating job with job id %d\n", job_id);	
-			index = locate_job(jobs, NULL, job_id);
+			found = delete_job(jobs, NULL, job_id);
 			id = 1;
 		}else if(sscanf(buffer, "op=term lbl=%s", label)){
 			dbg_printf("Request for terminating job with label %s\n", label);	
-			index = locate_job(jobs, label, 0);
+			found = delete_job(jobs, label, 0);
 			lab = 1;
 		}
-		if(index > -1){
-			dbg_printf("Found job with index %d\n", index);	
-			short *t = jobs[index].run_it;
-			*t = 0;
-			thread_wait = 1;
-			int i;
-			for (i = index; i < num_threads - 1;i++) {
-				jobs[i] = jobs[i + 1];
-			}
-			num_threads--;
-
-		}
-		if(lab > 0)	
-			if(index > -1)
-				nbytes = snprintf(buffer, BUFSIZE, "+%s_label_terminated\n", label);
-			else
-				nbytes = snprintf(buffer, BUFSIZE, "+%s_label_notfound\n", label);
-		else if(id > 0)
-			if(index > -1)
+		if(found > 0){
+			if(lab > 0){
+				nbytes = snprintf(buffer, BUFSIZE,"+%s_label_terminated\n", label);
+			}else if(id > 0){
 				nbytes = snprintf(buffer, BUFSIZE, "+%d_id_terminated\n", job_id);
-			else
+			}
+		}else{
+			if(lab > 0){
+				nbytes = snprintf(buffer, BUFSIZE, "+%s_label_notfound\n", label);
+			}else if(id > 0){
 				nbytes = snprintf(buffer, BUFSIZE, "+%d_id_notfound\n", job_id);
-
+			}
+		}
 		if(id > 0 || lab > 0)
 			write(connection_fd, buffer, nbytes);
 	}
@@ -291,7 +355,6 @@ int send_command(char *opstring){
 		return 1;
 	}
 
-	 /* start with a clean address structure */
 	memset(&address, 0, sizeof(struct sockaddr_un));
 
 	address.sun_family = AF_UNIX;
@@ -330,13 +393,38 @@ void init_signals(void){
 }
 
 int main(int argc, char *argv[]) {
-	Job jobs[CF_MAXTHREADS];	
+	Job_list *jobs = (Job_list *)malloc(sizeof(Job_list));
+
+/*
+add_job(jobs,"label5","sleep 3 && date >> /tmp/test1.txt",5);
+add_job(jobs,"label6","sleep 3 && date >> /tmp/test1.txt",5);
+delete_job(jobs,"label5",0);
+print_status(jobs,0);
+
+exit(0);
+*/
+
+/*	add_job(jobs,"label2","command2",5);
+	add_job(jobs,"label3","command3",5);
+	add_job(jobs,"label4","command4",5);
+	add_job(jobs,"label5","command5",5);
+
+	delete_job(jobs,"label5",0);
+
+	add_job(jobs,"label9","command9",5);
+	add_job(jobs,"label6","command6",5);
+	add_job(jobs,"label7","command7",5);
+	add_job(jobs,"label8","command8",5);
+*/
+
+
+/*	print_jobs(jobs); */
+
 	int i;
 
 	int rc = 0;
 	
 	struct sockaddr_un address;
-	//int connection_fd;
 	int socket_fd, connection_fd;
 	socklen_t address_length;
 	pid_t child;
@@ -435,8 +523,6 @@ int main(int argc, char *argv[]) {
 		return 1;
 	} 
 
-	//unlink(SOCKPATH);
-
 	memset(&address, 0, sizeof(struct sockaddr_un));
 
 	address.sun_family = AF_UNIX;
@@ -455,6 +541,7 @@ int main(int argc, char *argv[]) {
 	char mode[5];
 	strcpy(mode, "0700");
 	int m = atoi(mode);
+
 	chmod(SOCKPATH,S_IRUSR|S_IWUSR|S_IXUSR);
 
 	while(1) {
@@ -471,4 +558,3 @@ int main(int argc, char *argv[]) {
 	unlink(SOCKPATH);
 	return(0);
 }
-
