@@ -144,9 +144,11 @@ void add_job(Job_list *jobs, char *label, char *cmd, int interval){
 	int rc = 0;
 
 	temp = (Job_node *)malloc(sizeof(Job_node));
+	memset(temp,0,sizeof(Job_node));
 	assert(temp != NULL);
 
 	temp->job = (Job *)malloc(sizeof(Job));
+	memset(temp->job,0,sizeof(Job));
 	assert(temp->job != NULL);
 	
 	temp->job->cmd = (char *)malloc((strlen(cmd) + 1) * sizeof(char));
@@ -274,8 +276,10 @@ Job_node *locate_job(Job_list *jobs, char *label){
 		return NULL;
 	
 	while(iter->next != NULL){
-		if((strcmp(iter->job->label, label)) == 0){
-			return iter;
+		if(iter->job != NULL && iter->job->label != NULL){
+			if((strcmp(iter->job->label, label)) == 0){
+				return iter;
+			}
 		}
 		iter = iter->next;
 	}
