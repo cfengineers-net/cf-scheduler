@@ -166,6 +166,8 @@ void add_job(Job_list *jobs, char *label, char *cmd, int interval){
 
 	rc = pthread_create(&temp->job->thread, NULL, run, (void *)temp->job);
 
+	pthread_detach(temp->job->thread);
+
 	if (jobs->head == NULL) {     /* list is empty */
 		jobs->head = jobs->tail = temp;
 		return;
@@ -219,6 +221,7 @@ int delete_job(Job_list *jobs, char *label, int job_id) {
 		free(iter->job->cmd);
 		free(iter->job);
 		free(iter);
+		iter = NULL;
 		num_threads--;
 	}
 	return(found);
