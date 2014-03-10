@@ -42,9 +42,12 @@
 #define BUFSIZE 4096
 #define CF_MAXTHREADS 128
 #define SOCKPATH "/var/tmp/cf-scheduler-socket"
+#define READ 0
+#define WRITE 1
 
 struct job {
 	short run_it;
+	pid_t pid;
 	int interval;
 	char *label;
 	char *cmd;
@@ -103,6 +106,7 @@ void usage() {
 "\n");
 }
 
+
 void dbg_printf(const char *fmt, ...) {
 	if(debug == 1){
 		va_list args;
@@ -121,7 +125,7 @@ void *run(void *job) {
 	char buf[BUFSIZE];
 
 	errno = 0;
-
+	pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS,NULL);
 	while(1){
 		gettimeofday(&before, NULL);		
 
@@ -229,6 +233,7 @@ int delete_job(Job_list *jobs, char *label, int job_id) {
 	}
 	if(found > 0){
 		pthread_cancel(iter->job->thread);
+		//pthread_kill(iter->job->thread,9);
 
 		pthread_join(iter->job->thread, NULL);
 
@@ -243,14 +248,49 @@ int delete_job(Job_list *jobs, char *label, int job_id) {
 	return(found);
 }
 
+pid_t popen2(const char *command, int *infp, int *outfp) {
+    int p_stdin[2], p_stdout[2];
+    pid_t pid;
+
+    if (pipe(p_stdin) != 0 || pipe(p_stdout) != 0)
+        return -1;
+
+    pid = fork();
+
+    if (pid < 0)
+        return pid;
+    else if (pid == 0) {
+        close(p_stdin[WRITE]);
+        dup2(p_stdin[READ], READ);
+        close(p_stdout[READ]);
+        dup2(p_stdout[WRITE], WRITE);
+
+        execl("/bin/sh", "sh", "-c", command, NULL);
+        perror("execl");
+        exit(1);
+    }
+
+    if (infp == NULL)
+        close(p_stdin[WRITE]);
+    else
+        *infp = p_stdin[WRITE];
+
+    if (outfp == NULL)
+        close(p_stdout[READ]);
+    else
+        *outfp = p_stdout[READ];
+
+    return pid;
+}
+
 int exec_shell(const char *cmd) {
 	FILE *p = NULL;
-
 	if ((p = popen(cmd, "w")) == NULL)
 		return (-1);
 
 	return (pclose(p));
 }
+
 
 int u_sleep(long usec) {
 	struct timeval tv;
