@@ -43,13 +43,6 @@
 #define CF_MAXTHREADS 128
 #define SOCKPATH "/var/tmp/cf-scheduler-socket"
 
-int num_threads = 0;
-int job_id = 0;
-short debug = 0;
-struct sigaction sigact;
-char *prog_name_canon = "cf_scheduler";
-int socket_fd = 0;
-
 struct job {
 	short run_it;
 	int interval;
@@ -72,9 +65,20 @@ typedef struct job_node Job_node;
 struct job_list {
 	Job_node *head;
 	Job_node *tail;
+	pthread_mutex_t mutex;
 };
 
 typedef struct job_list Job_list;
+
+int num_threads = 0;
+int job_id = 0;
+short debug = 0;
+struct sigaction sigact;
+char *prog_name_canon = "cf_scheduler";
+int socket_fd = 0;
+static void *job_l;
+//Job_list *jobs = NULL;
+
 
 void usage() {
 	printf("\n"
@@ -143,6 +147,8 @@ void add_job(Job_list *jobs, char *label, char *cmd, int interval){
 	Job_node *temp, *current;
 	int rc = 0;
 
+	pthread_mutex_lock(&jobs->mutex);
+
 	temp = (Job_node *)malloc(sizeof(Job_node));
 	memset(temp,0,sizeof(Job_node));
 	assert(temp != NULL);
@@ -166,14 +172,16 @@ void add_job(Job_list *jobs, char *label, char *cmd, int interval){
 
 	rc = pthread_create(&temp->job->thread, NULL, run, (void *)temp->job);
 
-	pthread_detach(temp->job->thread);
+	//pthread_detach(temp->job->thread);
 
 	if (jobs->head == NULL) {     /* list is empty */
 		jobs->head = jobs->tail = temp;
+		pthread_mutex_unlock(&jobs->mutex);
 		return;
 	} else { // list is not empty
 		jobs->tail->next = temp;
 		jobs->tail = temp;
+		pthread_mutex_unlock(&jobs->mutex);
 		return;
 	}
 }
@@ -191,6 +199,9 @@ int delete_job(Job_list *jobs, char *label, int job_id) {
 	while(iter->next != NULL){
 		if((label != NULL && (strcmp(iter->job->label,label)) == 0) || (job_id != 0 && iter->job->job_id == job_id)) {
 			found = 1;
+
+			pthread_mutex_lock(&jobs->mutex);
+
 			if(previous == NULL) { /* First item */
 				jobs->head = iter->next;
 				break;
@@ -205,6 +216,7 @@ int delete_job(Job_list *jobs, char *label, int job_id) {
 
 	if(found == 0) {
 		if((label != NULL && (strcmp(iter->job->label,label)) == 0) || (job_id != 0 && iter->job->job_id == job_id)) {
+			pthread_mutex_lock(&jobs->mutex);
 			if(jobs->tail == jobs->head){
 				jobs->tail = NULL;
 				jobs->head = NULL;
@@ -217,12 +229,16 @@ int delete_job(Job_list *jobs, char *label, int job_id) {
 	}
 	if(found > 0){
 		pthread_cancel(iter->job->thread);
+
+		pthread_join(iter->job->thread, NULL);
+
 		free(iter->job->label);
 		free(iter->job->cmd);
 		free(iter->job);
 		free(iter);
 		iter = NULL;
 		num_threads--;
+		pthread_mutex_unlock(&jobs->mutex);
 	}
 	return(found);
 }
@@ -383,7 +399,37 @@ int send_command(char *opstring){
 }
 
 static void signal_handler(int sig){
+	
 	if (sig == SIGINT || sig == SIGTERM) {
+		Job_list *jobs = (Job_list *) job_l;
+		Job_node *iter = jobs->head;		
+		Job_node *previous = NULL;		
+		if(iter != NULL) {
+			while(iter->next != NULL){
+				if(previous != NULL) {
+					free(previous->job->label);
+					free(previous->job->cmd);
+					free(previous->job);
+					free(previous);
+				}
+				pthread_cancel(iter->job->thread);
+				previous = iter;
+				iter = iter->next;
+			}
+			pthread_cancel(iter->job->thread);
+			if(previous != NULL) {
+				free(previous->job->label);
+				free(previous->job->cmd);
+				free(previous->job);
+				free(previous);
+			}
+			if(iter != NULL){
+				free(iter->job->label);
+				free(iter->job->cmd);
+				free(iter->job);
+				free(iter);
+			}
+		}
 		dbg_printf("Caught signal %d. Exiting gracefully....\n", sig);
 		close(socket_fd);
 		unlink(SOCKPATH);
@@ -399,8 +445,13 @@ void init_signals(void){
 	sigaction(SIGTERM, &sigact, (struct sigaction *)NULL);
 }
 
+void initialize_p (void *p) {
+     job_l = p;
+}
+
 int main(int argc, char *argv[]) {
 	Job_list *jobs = (Job_list *)malloc(sizeof(Job_list));
+	initialize_p(jobs);
 
 /*
 add_job(jobs,"label5","sleep 3 && date >> /tmp/test1.txt",5);
