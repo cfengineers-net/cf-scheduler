@@ -47,11 +47,13 @@
 
 struct job {
 	short run_it;
-	pid_t pid;
 	int interval;
 	char *label;
 	char *cmd;
 	int job_id;
+	int in;
+	int out;
+	pid_t pid;
 	pthread_attr_t pta;
 	pthread_t thread;
 };
@@ -117,6 +119,43 @@ void dbg_printf(const char *fmt, ...) {
 	}
 }
 
+pid_t popen2(const char *command, int *infp, int *outfp) {
+
+    int p_stdin[2], p_stdout[2];
+    pid_t pid;
+
+    if (pipe(p_stdin) != 0 || pipe(p_stdout) != 0)
+        return -1;
+
+    pid = fork();
+
+    if (pid < 0)
+        return pid;
+    else if (pid == 0)
+    {
+        close(p_stdin[WRITE]);
+        dup2(p_stdin[READ], READ);
+        close(p_stdout[READ]);
+        dup2(p_stdout[WRITE], WRITE);
+				setsid();
+        execl("/bin/sh", "sh", "-c", command, NULL);
+        perror("execl");
+        exit(1);
+    }
+
+    if (infp == NULL)
+        close(p_stdin[WRITE]);
+    else
+        *infp = p_stdin[WRITE];
+
+    if (outfp == NULL)
+        close(p_stdout[READ]);
+    else
+        *outfp = p_stdout[READ];
+
+    return pid;
+}
+
 void *run(void *job) {
 	Job *j = (Job *)job;
 	struct timeval before,after,sleeper;
@@ -131,7 +170,11 @@ void *run(void *job) {
 
 		dbg_printf("Spawning  => Label: %s, Job: %s\n", j->label, j->cmd);
 	
-		exec_shell(j->cmd);
+		//exec_shell(j->cmd);
+		j->pid = popen2(j->cmd,NULL,NULL);
+
+		waitpid(j->pid,NULL,0);
+
 
 		gettimeofday(&after, NULL);
 
@@ -190,6 +233,25 @@ void add_job(Job_list *jobs, char *label, char *cmd, int interval){
 	}
 }
 
+int kill_process(pid_t pid){
+	int iter = 10;
+	int start = 0;
+	killpg(pid, SIGTERM);
+
+	//killpg(pid, SIGKILL);
+	/*
+	while((kill(pid, 0)) == 0) {
+		dbg_printf("Sleeping waiting for process %d to exit....\n", pid);
+		u_sleep(100000);
+		start++;
+		if(start > iter){
+			dbg_printf("Killing %d with SIGKILL....\n", pid);
+			killpg(pid, SIGKILL);
+		}
+	}
+	*/
+}
+
 int delete_job(Job_list *jobs, char *label, int job_id) {
 
 	Job_node *iter,*previous;
@@ -232,10 +294,12 @@ int delete_job(Job_list *jobs, char *label, int job_id) {
 		}
 	}
 	if(found > 0){
+		
 		pthread_cancel(iter->job->thread);
-		//pthread_kill(iter->job->thread,9);
 
 		pthread_join(iter->job->thread, NULL);
+
+		kill_process(iter->job->pid);
 
 		free(iter->job->label);
 		free(iter->job->cmd);
@@ -248,48 +312,15 @@ int delete_job(Job_list *jobs, char *label, int job_id) {
 	return(found);
 }
 
-pid_t popen2(const char *command, int *infp, int *outfp) {
-    int p_stdin[2], p_stdout[2];
-    pid_t pid;
 
-    if (pipe(p_stdin) != 0 || pipe(p_stdout) != 0)
-        return -1;
-
-    pid = fork();
-
-    if (pid < 0)
-        return pid;
-    else if (pid == 0) {
-        close(p_stdin[WRITE]);
-        dup2(p_stdin[READ], READ);
-        close(p_stdout[READ]);
-        dup2(p_stdout[WRITE], WRITE);
-
-        execl("/bin/sh", "sh", "-c", command, NULL);
-        perror("execl");
-        exit(1);
-    }
-
-    if (infp == NULL)
-        close(p_stdin[WRITE]);
-    else
-        *infp = p_stdin[WRITE];
-
-    if (outfp == NULL)
-        close(p_stdout[READ]);
-    else
-        *outfp = p_stdout[READ];
-
-    return pid;
-}
-
-int exec_shell(const char *cmd) {
+/*int exec_shell(const char *cmd) {
 	FILE *p = NULL;
 	if ((p = popen(cmd, "w")) == NULL)
 		return (-1);
 
 	return (pclose(p));
 }
+*/
 
 
 int u_sleep(long usec) {
