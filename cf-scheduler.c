@@ -236,7 +236,8 @@ void add_job(Job_list *jobs, char *label, char *cmd, int interval){
 int kill_process(pid_t pid){
 	int iter = 10;
 	int start = 0;
-	killpg(pid, SIGTERM);
+	killpg(pid, SIGINT);
+	//killpg(pid, SIGTERM);
 
 	//killpg(pid, SIGKILL);
 	/*
@@ -524,6 +525,10 @@ void initialize_p (void *p) {
 
 int main(int argc, char *argv[]) {
 	Job_list *jobs = (Job_list *)malloc(sizeof(Job_list));
+	jobs->head = NULL;
+	jobs->tail = NULL;
+	//memset(jobs->tail,0,sizeof(Job_node));
+
 	initialize_p(jobs);
 
 /*
