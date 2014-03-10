@@ -484,6 +484,7 @@ static void signal_handler(int sig){
 					free(previous);
 				}
 				pthread_cancel(iter->job->thread);
+				kill_process(iter->job->pid);
 				previous = iter;
 				iter = iter->next;
 			}
@@ -495,6 +496,7 @@ static void signal_handler(int sig){
 				free(previous);
 			}
 			if(iter != NULL){
+				kill_process(iter->job->pid);
 				free(iter->job->label);
 				free(iter->job->cmd);
 				free(iter->job);
