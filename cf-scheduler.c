@@ -53,6 +53,8 @@ struct job {
 	int job_id;
 	int in;
 	int out;
+	int timeout;
+	struct timeval last;
 	pid_t pid;
 	pthread_attr_t pta;
 	pthread_t thread;
@@ -167,14 +169,12 @@ void *run(void *job) {
 	pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS,NULL);
 	while(1){
 		gettimeofday(&before, NULL);		
-
+		gettimeofday(&j->last, NULL);
 		dbg_printf("Spawning  => Label: %s, Job: %s\n", j->label, j->cmd);
 	
-		//exec_shell(j->cmd);
 		j->pid = popen2(j->cmd,NULL,NULL);
 
 		waitpid(j->pid,NULL,0);
-
 
 		gettimeofday(&after, NULL);
 
@@ -214,6 +214,7 @@ void add_job(Job_list *jobs, char *label, char *cmd, int interval){
 	num_threads++;
 
 	temp->job->interval = interval;
+	temp->job->timeout = 2*interval;
 	temp->job->run_it = 1;
 	temp->job->job_id = job_id;
 
@@ -313,24 +314,12 @@ int delete_job(Job_list *jobs, char *label, int job_id) {
 	return(found);
 }
 
-
-/*int exec_shell(const char *cmd) {
-	FILE *p = NULL;
-	if ((p = popen(cmd, "w")) == NULL)
-		return (-1);
-
-	return (pclose(p));
-}
-*/
-
-
 int u_sleep(long usec) {
 	struct timeval tv;
 	tv.tv_sec = usec/1000000L;
 	tv.tv_usec = usec%1000000L;
 	return select(0, 0, 0, 0, &tv);
 }
-
 
 void print_status(Job_list *jobs, int connection_fd){
 	Job_node *iter = jobs->head;
@@ -523,6 +512,34 @@ void initialize_p (void *p) {
      job_l = p;
 }
 
+void *timeout_jobs(void *jobs){
+	Job_list *jl = (Job_list *) jobs;
+	Job_node *iter = NULL;
+	struct timeval now;
+	long timeout = 0;
+	while(1){
+//		dbg_printf("Checking for timed out jobs.....\n");
+		gettimeofday(&now, NULL);		
+		iter = jl->head;
+		if(iter != NULL) {
+			while(iter->next != NULL){
+				timeout = now.tv_sec - iter->job->last.tv_sec - (long)iter->job->timeout;	
+				if(timeout > 0){
+					dbg_printf("Job with label %s has timed out. Terminating...\n", iter->job->label);
+					delete_job(jl,iter->job->label, 0);
+				}
+				iter = iter->next;
+			}
+			timeout = now.tv_sec - iter->job->last.tv_sec - (long)iter->job->timeout;	
+			if(timeout > 0){
+				dbg_printf("Job with label %s has timed out. Terminating...\n", iter->job->label);
+				delete_job(jl,iter->job->label, 0);
+			}
+		}
+		u_sleep(1000000);
+	}
+}
+
 int main(int argc, char *argv[]) {
 	Job_list *jobs = (Job_list *)malloc(sizeof(Job_list));
 	jobs->head = NULL;
@@ -564,6 +581,8 @@ exit(0);
 	int socket_fd, connection_fd;
 	socklen_t address_length;
 	pid_t child;
+
+	pthread_t timeout_thread;
 
 	int status = 0;
 	char *label = NULL;
@@ -679,6 +698,8 @@ exit(0);
 	int m = atoi(mode);
 
 	chmod(SOCKPATH,S_IRUSR|S_IWUSR|S_IXUSR);
+
+	rc = pthread_create(&timeout_thread, NULL, timeout_jobs, (void *)jobs);
 
 	while(1) {
 		address_length = sizeof(address);
