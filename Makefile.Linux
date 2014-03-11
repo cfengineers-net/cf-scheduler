@@ -1,4 +1,4 @@
-CC=gcc -g
+CC=gcc -g -Wunused-variable
 
 LDFLAGS= -L/var/cfengine/lib
 LDLIBS=-Wl,-rpath,/var/cfengine/lib -lpthread

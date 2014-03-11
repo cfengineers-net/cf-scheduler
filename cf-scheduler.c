@@ -40,7 +40,6 @@
 #endif
 
 #define BUFSIZE 4096
-#define CF_MAXTHREADS 128
 #define SOCKPATH "/var/tmp/cf-scheduler-socket"
 #define READ 0
 #define WRITE 1
@@ -160,10 +159,10 @@ pid_t popen2(const char *command, int *infp, int *outfp) {
 
 void *run(void *job) {
 	Job *j = (Job *)job;
-	struct timeval before,after,sleeper;
-	FILE *fp;
+	struct timeval before,after;//sleeper;
+//	FILE *fp;
 	long msec; 
-	char buf[BUFSIZE];
+//	char buf[BUFSIZE];
 
 	errno = 0;
 	pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS,NULL);
@@ -191,7 +190,7 @@ void *run(void *job) {
 }
 
 void add_job(Job_list *jobs, char *label, char *cmd, int interval){
-	Job_node *temp, *current;
+	Job_node *temp;//, *current;
 	int rc = 0;
 
 	pthread_mutex_lock(&jobs->mutex);
@@ -220,8 +219,6 @@ void add_job(Job_list *jobs, char *label, char *cmd, int interval){
 
 	rc = pthread_create(&temp->job->thread, NULL, run, (void *)temp->job);
 
-	//pthread_detach(temp->job->thread);
-
 	if (jobs->head == NULL) {     /* list is empty */
 		jobs->head = jobs->tail = temp;
 		pthread_mutex_unlock(&jobs->mutex);
@@ -235,9 +232,11 @@ void add_job(Job_list *jobs, char *label, char *cmd, int interval){
 }
 
 int kill_process(pid_t pid){
-	int iter = 10;
-	int start = 0;
-	killpg(pid, SIGINT);
+
+	killpg(pid, SIGTERM);
+
+//	if((getpgid(pid)) > -1)
+//		killpg(pid, SIGTERM);
 	//killpg(pid, SIGTERM);
 
 	//killpg(pid, SIGKILL);
@@ -375,10 +374,8 @@ int connection_handler(Job_list *jobs, int connection_fd) {
 	char buffer[BUFSIZE];
 	nbytes = read(connection_fd, buffer, BUFSIZE);
 	buffer[nbytes] = 0;
-	char op[BUFSIZE];
 	char command[BUFSIZE];
 	int interval,job_id;
-	int thread_wait = 0;
 	char label[BUFSIZE];
 	
 	if(sscanf(buffer, "op=job intvl=%d lbl=%s cmd=%[^\t\n] %*s",  &interval, label, command)) {
@@ -518,7 +515,6 @@ void *timeout_jobs(void *jobs){
 	struct timeval now;
 	long timeout = 0;
 	while(1){
-//		dbg_printf("Checking for timed out jobs.....\n");
 		gettimeofday(&now, NULL);		
 		iter = jl->head;
 		if(iter != NULL) {
@@ -544,36 +540,8 @@ int main(int argc, char *argv[]) {
 	Job_list *jobs = (Job_list *)malloc(sizeof(Job_list));
 	jobs->head = NULL;
 	jobs->tail = NULL;
-	//memset(jobs->tail,0,sizeof(Job_node));
 
 	initialize_p(jobs);
-
-/*
-add_job(jobs,"label5","sleep 3 && date >> /tmp/test1.txt",5);
-add_job(jobs,"label6","sleep 3 && date >> /tmp/test1.txt",5);
-delete_job(jobs,"label5",0);
-print_status(jobs,0);
-
-exit(0);
-*/
-
-/*	add_job(jobs,"label2","command2",5);
-	add_job(jobs,"label3","command3",5);
-	add_job(jobs,"label4","command4",5);
-	add_job(jobs,"label5","command5",5);
-
-	delete_job(jobs,"label5",0);
-
-	add_job(jobs,"label9","command9",5);
-	add_job(jobs,"label6","command6",5);
-	add_job(jobs,"label7","command7",5);
-	add_job(jobs,"label8","command8",5);
-*/
-
-
-/*	print_jobs(jobs); */
-
-	int i;
 
 	int rc = 0;
 	
@@ -692,10 +660,6 @@ exit(0);
 		printf("listen() failed\n");
 		return 1;
 	}
-
-	char mode[5];
-	strcpy(mode, "0700");
-	int m = atoi(mode);
 
 	chmod(SOCKPATH,S_IRUSR|S_IWUSR|S_IXUSR);
 
