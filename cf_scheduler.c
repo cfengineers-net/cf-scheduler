@@ -29,6 +29,7 @@
 #include <string.h>
 #include <errno.h>
 #include <stdarg.h>
+#include <fcntl.h>
 
 #ifdef __linux__
 # include <linux/un.h>
@@ -40,7 +41,8 @@
 #endif
 
 #define BUFSIZE 4096
-#define SOCKPATH "/var/tmp/cf-scheduler-socket"
+#define PROGNAME_CANON "cf_scheduler"
+#define SOCKPATH "/var/tmp/" PROGNAME_CANON "_socket"
 #define READ 0
 #define WRITE 1
 
@@ -80,7 +82,6 @@ int num_threads = 0;
 int job_id = 0;
 short debug = 0;
 struct sigaction sigact;
-char *prog_name_canon = "cf_scheduler";
 int socket_fd = 0;
 static void *job_l;
 //Job_list *jobs = NULL;
@@ -338,7 +339,7 @@ void print_status(Job_list *jobs, int connection_fd){
 		write(connection_fd, buffer, nbytes);
 		nbytes = snprintf(buffer, BUFSIZE,"=status[%d][label]=%s\n", iter->job->job_id, iter->job->label);
 		write(connection_fd, buffer, nbytes);
-		nbytes = snprintf(buffer, BUFSIZE,"+%s_label_%s_exists\n", prog_name_canon, iter->job->label);
+		nbytes = snprintf(buffer, BUFSIZE,"+%s_label_%s_exists\n", PROGNAME_CANON, iter->job->label);
 		write(connection_fd, buffer, nbytes);
 		iter = iter->next;
 	}
@@ -348,7 +349,7 @@ void print_status(Job_list *jobs, int connection_fd){
 	write(connection_fd, buffer, nbytes);
 	nbytes = snprintf(buffer, BUFSIZE,"=status[%d][label]=%s\n", iter->job->job_id, iter->job->label);
 	write(connection_fd, buffer, nbytes);
-	nbytes = snprintf(buffer, BUFSIZE,"+%s_label_%s_exists\n", prog_name_canon, iter->job->label);
+	nbytes = snprintf(buffer, BUFSIZE,"+%s_label_%s_exists\n", PROGNAME_CANON, iter->job->label);
 	write(connection_fd, buffer, nbytes);
 }
 
@@ -386,10 +387,10 @@ int connection_handler(Job_list *jobs, int connection_fd) {
 		dbg_printf("Processing new job request.\n");
 		if((locate_job(jobs, label)) == NULL){
 			add_job(jobs, label, command, interval);
-			nbytes = snprintf(buffer, BUFSIZE,"+%s_label_%s_repaired\n", prog_name_canon, label);
+			nbytes = snprintf(buffer, BUFSIZE,"+%s_label_%s_repaired\n", PROGNAME_CANON, label);
 			write(connection_fd, buffer, nbytes);
 		}else{
-			nbytes = snprintf(buffer, BUFSIZE,"++%s_label_%s_exists\n", prog_name_canon, label);
+			nbytes = snprintf(buffer, BUFSIZE,"++%s_label_%s_exists\n", PROGNAME_CANON, label);
 			write(connection_fd, buffer, nbytes);
 		}
 	}else if(sscanf(buffer, "op=status%*s")) {
@@ -410,15 +411,15 @@ int connection_handler(Job_list *jobs, int connection_fd) {
 		}
 		if(found > 0){
 			if(lab > 0){
-				nbytes = snprintf(buffer, BUFSIZE,"+%s_label_%s_terminated\n", prog_name_canon, label);
+				nbytes = snprintf(buffer, BUFSIZE,"+%s_label_%s_terminated\n", PROGNAME_CANON, label);
 			}else if(id > 0){
-				nbytes = snprintf(buffer, BUFSIZE, "+%s_id_%d_terminated\n", prog_name_canon, job_id);
+				nbytes = snprintf(buffer, BUFSIZE, "+%s_id_%d_terminated\n", PROGNAME_CANON, job_id);
 			}
 		}else{
 			if(lab > 0){
-				nbytes = snprintf(buffer, BUFSIZE, "+%s_label_%s_notfound\n", prog_name_canon, label);
+				nbytes = snprintf(buffer, BUFSIZE, "+%s_label_%s_notfound\n", PROGNAME_CANON, label);
 			}else if(id > 0){
-				nbytes = snprintf(buffer, BUFSIZE, "+%s_id_%d_notfound\n", prog_name_canon, job_id);
+				nbytes = snprintf(buffer, BUFSIZE, "+%s_id_%d_notfound\n", PROGNAME_CANON, job_id);
 			}
 		}
 		if(id > 0 || lab > 0)
@@ -436,7 +437,7 @@ int send_command(char *opstring){
 
 	socket_fd = socket(PF_UNIX, SOCK_STREAM, 0);
 	if(socket_fd < 0) {
-		printf("+%s_failed_socket\n", prog_name_canon);
+		printf("+%s_failed_socket\n", PROGNAME_CANON);
 		return 1;
 	}
 
@@ -446,7 +447,7 @@ int send_command(char *opstring){
 	snprintf(address.sun_path, UNIX_PATH_MAX, SOCKPATH);
 
 	if(connect(socket_fd, (struct sockaddr *) &address, sizeof(struct sockaddr_un)) != 0) {
-		printf("+%s_failed_connect\n", prog_name_canon);
+		printf("+%s_failed_connect\n", PROGNAME_CANON);
 		return 1;
 	}
 
@@ -564,6 +565,8 @@ int main(int argc, char *argv[]) {
 	short term = 0;
 	int c = 0;
 	struct stat fileStat;
+	int fd[2];
+	pipe(fd);
 
 	while ((c = getopt (argc, argv, "hdsti:l:c:I:")) != -1)
 		switch (c) {
@@ -642,6 +645,15 @@ int main(int argc, char *argv[]) {
 		}
 		if (child>0) { //parent
 			exit(EXIT_SUCCESS);
+		}else{
+			int fd = open("/dev/null", O_RDWR, 0);
+			if (fd != -1) {
+				dup2(fd,STDIN_FILENO);
+				dup2(fd,STDOUT_FILENO);
+				dup2(fd,STDERR_FILENO);
+				if (fd > STDERR_FILENO) 
+					close(fd);
+			}
 		}
 		if( setsid()<0 ) { //failed to become session leader
 			fprintf(stderr,"error: failed setsid\n");

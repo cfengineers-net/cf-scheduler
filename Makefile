@@ -1,9 +1,11 @@
-PROG = cf-scheduler
+PROG = cf_scheduler
 
 OS = $(shell uname -s)
 
+MAKE = $(shell which gmake || which make)
+
 all:
-	make -f Makefile.$(OS)
+	$(MAKE) -f Makefile.$(OS)
 
 clean:
 	rm -f $(PROG)
