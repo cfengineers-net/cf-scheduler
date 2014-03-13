@@ -338,6 +338,8 @@ void print_status(Job_list *jobs, int connection_fd){
 		write(connection_fd, buffer, nbytes);
 		nbytes = snprintf(buffer, BUFSIZE,"=status[%d][label]=%s\n", iter->job->job_id, iter->job->label);
 		write(connection_fd, buffer, nbytes);
+		nbytes = snprintf(buffer, BUFSIZE,"+%s_label_%s_exists\n", prog_name_canon, iter->job->label);
+		write(connection_fd, buffer, nbytes);
 		iter = iter->next;
 	}
 	nbytes = snprintf(buffer, BUFSIZE,"=status[%d][cmd]=%s\n", iter->job->job_id, iter->job->cmd);
@@ -345,6 +347,8 @@ void print_status(Job_list *jobs, int connection_fd){
 	nbytes = snprintf(buffer, BUFSIZE,"=status[%d][interval]=%d\n", iter->job->job_id, iter->job->interval);
 	write(connection_fd, buffer, nbytes);
 	nbytes = snprintf(buffer, BUFSIZE,"=status[%d][label]=%s\n", iter->job->job_id, iter->job->label);
+	write(connection_fd, buffer, nbytes);
+	nbytes = snprintf(buffer, BUFSIZE,"+%s_label_%s_exists\n", prog_name_canon, iter->job->label);
 	write(connection_fd, buffer, nbytes);
 }
 
@@ -382,10 +386,10 @@ int connection_handler(Job_list *jobs, int connection_fd) {
 		dbg_printf("Processing new job request.\n");
 		if((locate_job(jobs, label)) == NULL){
 			add_job(jobs, label, command, interval);
-			nbytes = snprintf(buffer, BUFSIZE,"+%s_repaired\n", label);
+			nbytes = snprintf(buffer, BUFSIZE,"+%s_label_%s_repaired\n", prog_name_canon, label);
 			write(connection_fd, buffer, nbytes);
 		}else{
-			nbytes = snprintf(buffer, BUFSIZE,"+%s_exists\n", label);
+			nbytes = snprintf(buffer, BUFSIZE,"++%s_label_%s_exists\n", prog_name_canon, label);
 			write(connection_fd, buffer, nbytes);
 		}
 	}else if(sscanf(buffer, "op=status%*s")) {
@@ -406,15 +410,15 @@ int connection_handler(Job_list *jobs, int connection_fd) {
 		}
 		if(found > 0){
 			if(lab > 0){
-				nbytes = snprintf(buffer, BUFSIZE,"+%s_label_terminated\n", label);
+				nbytes = snprintf(buffer, BUFSIZE,"+%s_label_%s_terminated\n", prog_name_canon, label);
 			}else if(id > 0){
-				nbytes = snprintf(buffer, BUFSIZE, "+%d_id_terminated\n", job_id);
+				nbytes = snprintf(buffer, BUFSIZE, "+%s_id_%d_terminated\n", prog_name_canon, job_id);
 			}
 		}else{
 			if(lab > 0){
-				nbytes = snprintf(buffer, BUFSIZE, "+%s_label_notfound\n", label);
+				nbytes = snprintf(buffer, BUFSIZE, "+%s_label_%s_notfound\n", prog_name_canon, label);
 			}else if(id > 0){
-				nbytes = snprintf(buffer, BUFSIZE, "+%d_id_notfound\n", job_id);
+				nbytes = snprintf(buffer, BUFSIZE, "+%s_id_%d_notfound\n", prog_name_canon, job_id);
 			}
 		}
 		if(id > 0 || lab > 0)
@@ -432,7 +436,7 @@ int send_command(char *opstring){
 
 	socket_fd = socket(PF_UNIX, SOCK_STREAM, 0);
 	if(socket_fd < 0) {
-		printf("socket() failed\n");
+		printf("+%s_failed_socket\n", prog_name_canon);
 		return 1;
 	}
 
@@ -442,7 +446,7 @@ int send_command(char *opstring){
 	snprintf(address.sun_path, UNIX_PATH_MAX, SOCKPATH);
 
 	if(connect(socket_fd, (struct sockaddr *) &address, sizeof(struct sockaddr_un)) != 0) {
-		printf("connect() failed\n");
+		printf("+%s_failed_connect\n", prog_name_canon);
 		return 1;
 	}
 
@@ -599,23 +603,30 @@ int main(int argc, char *argv[]) {
 		exit(0);
 	}
 	
-	if(label != NULL && intrvl != NULL && command != NULL){
+	if(term > 0){
 		char buf[BUFSIZE];
-		sprintf(buf, "op=job intvl=%s lbl=%s cmd=%s",intrvl,label,command);
+		if(job_id != NULL) {
+			sprintf(buf, "op=term job_id=%s",job_id);
+		} else if(label != NULL) {
+			sprintf(buf, "op=term lbl=%s",label);
+		} else {
+			usage();
+			exit(1);
+		}
 		send_command(buf);
 		exit(0);
 	}
 
-	if(term > 0){
-		char buf[BUFSIZE];
-		if(job_id != NULL)
-			sprintf(buf, "op=term job_id=%s",job_id);
-		else if(label != NULL)
-			sprintf(buf, "op=term lbl=%s",label);
-		else
+	if(label != NULL || intrvl != NULL || command != NULL){
+		if(label != NULL && intrvl != NULL && command != NULL) {
+			char buf[BUFSIZE];
+			sprintf(buf, "op=job intvl=%s lbl=%s cmd=%s",intrvl,label,command);
+			send_command(buf);
+			exit(0);
+		}else{
+			usage();
 			exit(1);
-		send_command(buf);
-		exit(0);
+		}
 	}
 
 	if((stat(SOCKPATH,&fileStat)) > -1){

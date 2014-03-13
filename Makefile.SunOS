@@ -2,7 +2,7 @@ CC=gcc -g
 
 LDFLAGS= -L/var/cfengine/lib
 LDLIBS= -lpthread -lsocket
-PROG=cf-scheduler
+PROG=cf_scheduler
 
 all: $(PROG)
 

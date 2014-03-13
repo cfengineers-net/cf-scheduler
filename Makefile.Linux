@@ -2,7 +2,7 @@ CC=gcc -g -Wunused-variable
 
 LDFLAGS= -L/var/cfengine/lib
 LDLIBS=-Wl,-rpath,/var/cfengine/lib -lpthread
-PROG=cf-scheduler
+PROG=cf_scheduler
 
 all: $(PROG)
 
